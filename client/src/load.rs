@@ -57,6 +57,7 @@ impl OfficeConvertLoadBalancer {
             free_notify: Notify::new(),
             active: AtomicUsize::new(0),
             timing,
+            external_blocking_mutex: Default::default(),
         };
 
         Self {
@@ -67,9 +68,14 @@ impl OfficeConvertLoadBalancer {
     /// Checks if all client connections are blocked externally, used
     /// to handle the case when to not wait on notifiers
     pub async fn is_externally_blocked(&self) -> bool {
+        // This guard is used to ensure we are the ONLY one checking for blocking clients
+        // otherwise many threads will race the locking condition below starving the actual
+        // converter from running
+        let _guard = self.inner.external_blocking_mutex.lock().await;
+
         let inner = &*self.inner;
         for client in inner.clients.iter() {
-            let client = match timeout(Duration::from_secs(1), client.lock()).await {
+            let client = match client.try_lock() {
                 Ok(value) => value,
                 // Couldn't obtain the lock, this client is likely in use so we can
                 // consider ourselves to not be externally blocked
@@ -117,6 +123,9 @@ struct OfficeConvertLoadBalancerInner {
 
     /// Timing for various actions
     timing: LoadBalancerTiming,
+
+    /// Mutex used when checking for external blocking
+    external_blocking_mutex: Mutex<()>,
 }
 
 struct LoadBalancedClient {
