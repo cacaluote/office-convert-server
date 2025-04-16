@@ -6,6 +6,9 @@ services:
     container_name: office_convert_server_1
     ports:
       - "3000:3000"
+    environment:
+      RUST_LOG: debug
+
   # office_convert_server_2:
   #   build:
   #     context: .
