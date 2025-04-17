@@ -1,6 +1,9 @@
 use async_trait::async_trait;
 use bytes::Bytes;
-use reqwest::multipart::{Form, Part};
+use reqwest::{
+    multipart::{Form, Part},
+    Body,
+};
 use serde::Deserialize;
 use std::{sync::Arc, time::Duration};
 use thiserror::Error;
@@ -18,7 +21,7 @@ pub trait ConvertOffice {
     ///
     /// ## Arguments
     /// * `file` - The file bytes to convert
-    async fn convert(&self, file: Vec<u8>) -> Result<Bytes, RequestError>;
+    async fn convert(&self, file: Bytes) -> Result<Bytes, RequestError>;
 }
 
 #[derive(Clone)]
@@ -303,9 +306,9 @@ impl OfficeConvertClient {
 
 #[async_trait]
 impl ConvertOffice for OfficeConvertClient {
-    async fn convert(&self, file: Vec<u8>) -> Result<Bytes, RequestError> {
+    async fn convert(&self, file: Bytes) -> Result<Bytes, RequestError> {
         let route = format!("{}/convert", self.host);
-        let form = Form::new().part("file", Part::bytes(file));
+        let form = Form::new().part("file", Part::stream(Body::from(file)));
         let response = self
             .http
             .post(route)

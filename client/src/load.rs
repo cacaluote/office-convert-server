@@ -1,5 +1,6 @@
 use crate::{ConvertOffice, OfficeConvertClient, RequestError};
 use async_trait::async_trait;
+use bytes::Bytes;
 use std::{
     sync::{atomic::AtomicUsize, Arc},
     time::Duration,
@@ -144,7 +145,7 @@ pub enum LoadBalanceError {
 
 #[async_trait]
 impl ConvertOffice for OfficeConvertLoadBalancer {
-    async fn convert(&self, file: Vec<u8>) -> Result<bytes::Bytes, RequestError> {
+    async fn convert(&self, file: Bytes) -> Result<bytes::Bytes, RequestError> {
         let inner = &*self.inner;
 
         let total_clients = inner.clients.len();
