@@ -82,7 +82,7 @@ impl OfficeConvertLoadBalancer {
                 Err(_) => return false,
             };
 
-            // Client is busy externally
+            // Client is not busy externally
             if client.busy_externally_at.is_none() {
                 return false;
             }
