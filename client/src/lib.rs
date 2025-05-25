@@ -146,7 +146,7 @@ impl OfficeConvertClient {
         }
 
         let client = builder.build().map_err(CreateError::Builder)?;
-        Self::from_client(host, client)
+        Ok(Self::from_client(host, client))
     }
 
     /// Create an office convert client from an existing [reqwest::Client] if
@@ -155,14 +155,14 @@ impl OfficeConvertClient {
     /// ## Arguments
     /// * `host` - The host where the server is located
     /// * `client` - The request HTTP client to use
-    pub fn from_client<T>(host: T, client: reqwest::Client) -> Result<Self, CreateError>
+    pub fn from_client<T>(host: T, client: reqwest::Client) -> Self
     where
         T: Into<Arc<str>>,
     {
-        Ok(Self {
+        Self {
             http: client,
             host: host.into(),
-        })
+        }
     }
 
     /// Obtains the current status of the converter server
