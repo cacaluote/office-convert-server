@@ -1,10 +1,6 @@
-use crate::{ConvertOffice, OfficeConvertClient, RequestError};
-use async_trait::async_trait;
+use crate::{OfficeConvertClient, RequestError};
 use bytes::Bytes;
-use std::{
-    sync::{atomic::AtomicUsize, Arc},
-    time::Duration,
-};
+use std::{sync::atomic::AtomicUsize, time::Duration};
 use thiserror::Error;
 use tokio::{
     sync::{Mutex, Notify},
@@ -12,13 +8,57 @@ use tokio::{
 };
 use tracing::{debug, error};
 
+pub struct LoadBalancerTiming {
+    /// Time in-between external busy checks
+    pub retry_busy_check_after: Duration,
+    /// Time to wait before repeated attempts
+    pub retry_single_external: Duration,
+    /// Timeout to wait on the notifier for
+    pub notify_timeout: Duration,
+}
+
+impl Default for LoadBalancerTiming {
+    fn default() -> Self {
+        Self {
+            retry_busy_check_after: Duration::from_secs(5),
+            retry_single_external: Duration::from_secs(1),
+            notify_timeout: Duration::from_secs(120),
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum LoadBalanceError {
+    #[error("no servers available for load balancing")]
+    NoServers,
+}
+
+struct LoadBalancedClient {
+    /// The actual client
+    client: OfficeConvertClient,
+
+    /// Last time the server reported as busy externally
+    busy_externally_at: Option<Instant>,
+}
+
 /// Round robbin load balancer, will pass convert jobs
 /// around to the next available client, connections
 /// will wait until there is an available client
-#[derive(Clone)]
 pub struct OfficeConvertLoadBalancer {
-    /// Inner portion of the load balancer
-    inner: Arc<OfficeConvertLoadBalancerInner>,
+    /// Available clients the load balancer can use
+    clients: Vec<Mutex<LoadBalancedClient>>,
+
+    /// Number of active in use clients
+    active: AtomicUsize,
+
+    /// Notifier for connections that are no longer busy
+    free_notify: Notify,
+
+    /// Timing for various actions
+    timing: LoadBalancerTiming,
+
+    /// Mutex used when checking for external blocking
+    external_blocking_mutex: Mutex<()>,
 }
 
 impl OfficeConvertLoadBalancer {
@@ -53,16 +93,12 @@ impl OfficeConvertLoadBalancer {
             })
             .collect::<Vec<_>>();
 
-        let inner = OfficeConvertLoadBalancerInner {
+        Self {
             clients,
             free_notify: Notify::new(),
             active: AtomicUsize::new(0),
             timing,
             external_blocking_mutex: Default::default(),
-        };
-
-        Self {
-            inner: Arc::new(inner),
         }
     }
 
@@ -72,87 +108,26 @@ impl OfficeConvertLoadBalancer {
         // This guard is used to ensure we are the ONLY one checking for blocking clients
         // otherwise many threads will race the locking condition below starving the actual
         // converter from running
-        let _guard = self.inner.external_blocking_mutex.lock().await;
+        let _guard = self.external_blocking_mutex.lock().await;
 
-        let inner = &*self.inner;
-        for client in inner.clients.iter() {
-            let client = match client.try_lock() {
-                Ok(value) => value,
-                // Couldn't obtain the lock, this client is likely in use so we can
-                // consider ourselves to not be externally blocked
-                Err(_) => return false,
-            };
-
-            // Client is not busy externally
-            if client.busy_externally_at.is_none() {
-                return false;
-            }
-        }
-
-        true
+        self.clients
+            .iter()
+            // We are externally blocked if all clients are marked as
+            // busy externally and none of the clients have locks held
+            .all(|client| {
+                client
+                    .try_lock()
+                    // We could obtain the lock (Its not in use) and the client was marked as busy externally
+                    .is_ok_and(|client| client.busy_externally_at.is_some())
+            })
     }
-}
 
-pub struct LoadBalancerTiming {
-    /// Time in-between external busy checks
-    pub retry_busy_check_after: Duration,
-    /// Time to wait before repeated attempts
-    pub retry_single_external: Duration,
-    /// Timeout to wait on the notifier for
-    pub notify_timeout: Duration,
-}
-
-impl Default for LoadBalancerTiming {
-    fn default() -> Self {
-        Self {
-            retry_busy_check_after: Duration::from_secs(5),
-            retry_single_external: Duration::from_secs(1),
-            notify_timeout: Duration::from_secs(120),
-        }
-    }
-}
-
-struct OfficeConvertLoadBalancerInner {
-    /// Available clients the load balancer can use
-    clients: Vec<Mutex<LoadBalancedClient>>,
-
-    /// Number of active in use clients
-    active: AtomicUsize,
-
-    /// Notifier for connections that are no longer busy
-    free_notify: Notify,
-
-    /// Timing for various actions
-    timing: LoadBalancerTiming,
-
-    /// Mutex used when checking for external blocking
-    external_blocking_mutex: Mutex<()>,
-}
-
-struct LoadBalancedClient {
-    /// The actual client
-    client: OfficeConvertClient,
-
-    /// Last time the server reported as busy externally
-    busy_externally_at: Option<Instant>,
-}
-
-#[derive(Debug, Error)]
-pub enum LoadBalanceError {
-    #[error("no servers available for load balancing")]
-    NoServers,
-}
-
-#[async_trait]
-impl ConvertOffice for OfficeConvertLoadBalancer {
-    async fn convert(&self, file: Bytes) -> Result<bytes::Bytes, RequestError> {
-        let inner = &*self.inner;
-
-        let total_clients = inner.clients.len();
+    pub async fn convert(&self, file: Bytes) -> Result<bytes::Bytes, RequestError> {
+        let total_clients = self.clients.len();
         let multiple_clients = total_clients > 1;
 
         loop {
-            for (index, client) in inner.clients.iter().enumerate() {
+            for (index, client) in self.clients.iter().enumerate() {
                 let mut client = match client.try_lock() {
                     Ok(value) => value,
                     // Server is already in use
@@ -167,7 +142,7 @@ impl ConvertOffice for OfficeConvertLoadBalancer {
                     let since_check = now.duration_since(busy_externally_at);
 
                     // Don't check this server if the busy check timeout hasn't passed (only if we have multiple choices)
-                    if since_check < inner.timing.retry_busy_check_after && multiple_clients {
+                    if since_check < self.timing.retry_busy_check_after && multiple_clients {
                         continue;
                     }
                 }
@@ -197,24 +172,22 @@ impl ConvertOffice for OfficeConvertLoadBalancer {
                 debug!("obtained available server {index} for convert");
 
                 // Increase active counter
-                inner
-                    .active
+                self.active
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
                 let response = client.client.convert(file).await;
 
                 // Notify waiters that this server is now free
-                inner.free_notify.notify_waiters();
+                self.free_notify.notify_waiters();
 
                 // Decrease active counter
-                inner
-                    .active
+                self.active
                     .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
 
                 return response;
             }
 
-            let active_counter = inner.active.load(std::sync::atomic::Ordering::SeqCst);
+            let active_counter = self.active.load(std::sync::atomic::Ordering::SeqCst);
 
             // Handle case where all clients are blocked externally, we won't be woken by any clients
             // in this case, so instead of waiting for the notifier we wait a short duration
@@ -224,7 +197,7 @@ impl ConvertOffice for OfficeConvertLoadBalancer {
             let externally_blocked = self.is_externally_blocked().await;
             if externally_blocked || active_counter < 1 {
                 debug!("all servers are externally blocked, delaying next attempt");
-                sleep(inner.timing.retry_single_external).await;
+                sleep(self.timing.retry_single_external).await;
                 continue;
             }
 
@@ -232,7 +205,7 @@ impl ConvertOffice for OfficeConvertLoadBalancer {
 
             // All servers are in use, wait for the free notifier, this has a timeout
             // incase a complication occurs
-            _ = timeout(inner.timing.notify_timeout, inner.free_notify.notified()).await;
+            _ = timeout(self.timing.notify_timeout, self.free_notify.notified()).await;
         }
     }
 }

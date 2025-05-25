@@ -1,7 +1,10 @@
 {
     "words": [
+        "Jacobtread",
         "libreofficekit",
         "oneshot",
-        "reqwest"
+        "reqwest",
+        "rustls",
+        "serde"
     ]
 }

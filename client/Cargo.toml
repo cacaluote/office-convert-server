@@ -1,16 +1,18 @@
 [package]
 name = "office-convert-client"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/jacobtread/office-convert-server"
 authors = ["Jacobtread <jacobtread@gmail.com>"]
 readme = "../README.md"
-description = "Client library for interracting with office-convert-server"
+description = "Client library for interacting with office-convert-server"
 
 [dependencies]
-async-trait = "0.1"
+# Cheap bytes type
 bytes = "1.7"
+
+# HTTP client
 reqwest = { version = "0.12", default-features = false, features = [
     "json",
     "charset",
@@ -20,9 +22,15 @@ reqwest = { version = "0.12", default-features = false, features = [
     "macos-system-configuration",
 ] }
 
+# JSON and (de)serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# Error handling
 thiserror = "1"
-tokio = { version = "1", features = ["full"] }
+
+# Asynchronous primitives
+tokio = { version = "1", features = ["sync", "time", "parking_lot"] }
+
+# Logging
 tracing = "0.1"
