@@ -1,10 +1,10 @@
 use crate::{OfficeConvertClient, RequestError};
 use bytes::Bytes;
-use std::{sync::atomic::AtomicUsize, time::Duration};
+use std::time::Duration;
 use thiserror::Error;
 use tokio::{
-    sync::{Mutex, Notify},
-    time::{sleep, timeout, Instant},
+    sync::{Mutex, MutexGuard, Semaphore, SemaphorePermit},
+    time::{sleep, Instant},
 };
 use tracing::{debug, error};
 
@@ -41,6 +41,23 @@ struct LoadBalancedClient {
     busy_externally_at: Option<Instant>,
 }
 
+impl LoadBalancedClient {
+    async fn check_busy(&mut self) -> Result<(), RequestError> {
+        // Check if the server is busy externally (Busy outside of our control)
+        let externally_busy = self.client.is_busy().await?;
+
+        if externally_busy {
+            // Store the busy state if busy
+            self.busy_externally_at = Some(Instant::now());
+        } else {
+            // Clear external busy state
+            self.busy_externally_at = None;
+        }
+
+        Ok(())
+    }
+}
+
 /// Round robbin load balancer, will pass convert jobs
 /// around to the next available client, connections
 /// will wait until there is an available client
@@ -48,11 +65,9 @@ pub struct OfficeConvertLoadBalancer {
     /// Available clients the load balancer can use
     clients: Vec<Mutex<LoadBalancedClient>>,
 
-    /// Number of active in use clients
-    active: AtomicUsize,
-
-    /// Notifier for connections that are no longer busy
-    free_notify: Notify,
+    /// Permit for each client to track number of currently
+    /// used client and waiting for free clients
+    client_permit: Semaphore,
 
     /// Timing for various actions
     timing: LoadBalancerTiming,
@@ -93,10 +108,11 @@ impl OfficeConvertLoadBalancer {
             })
             .collect::<Vec<_>>();
 
+        let total_clients = clients.len();
+
         Self {
             clients,
-            free_notify: Notify::new(),
-            active: AtomicUsize::new(0),
+            client_permit: Semaphore::new(total_clients),
             timing,
             external_blocking_mutex: Default::default(),
         }
@@ -123,89 +139,92 @@ impl OfficeConvertLoadBalancer {
     }
 
     pub async fn convert(&self, file: Bytes) -> Result<bytes::Bytes, RequestError> {
-        let total_clients = self.clients.len();
-        let multiple_clients = total_clients > 1;
+        let (client, _client_permit) = self.acquire_client().await;
+        client.client.convert(file).await
+    }
 
+    /// Acquire a client, will wait until a new client is available
+    async fn acquire_client(&self) -> (MutexGuard<'_, LoadBalancedClient>, SemaphorePermit<'_>) {
         loop {
-            for (index, client) in self.clients.iter().enumerate() {
-                let mut client = match client.try_lock() {
-                    Ok(value) => value,
-                    // Server is already in use
-                    Err(_) => continue,
-                };
-
-                let client = &mut *client;
-
-                let now = Instant::now();
-
-                if let Some(busy_externally_at) = client.busy_externally_at {
-                    let since_check = now.duration_since(busy_externally_at);
-
-                    // Don't check this server if the busy check timeout hasn't passed (only if we have multiple choices)
-                    if since_check < self.timing.retry_busy_check_after && multiple_clients {
-                        continue;
-                    }
-                }
-
-                // Check if the server is busy externally (Busy outside of our control)
-                let externally_busy = match client.client.is_busy().await {
-                    Ok(value) => value,
-                    Err(err) => {
-                        error!("failed to perform server busy check at {index}: {err}");
-
-                        // Mark erroneous servers as busy
-                        true
-                    }
-                };
-
-                // Store the busy state if busy
-                if externally_busy {
-                    debug!("server at {index} is busy externally");
-
-                    client.busy_externally_at = Some(now);
-                    continue;
-                }
-
-                // Clear external busy state
-                client.busy_externally_at = None;
-
-                debug!("obtained available server {index} for convert");
-
-                // Increase active counter
-                self.active
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-
-                let response = client.client.convert(file).await;
-
-                // Notify waiters that this server is now free
-                self.free_notify.notify_waiters();
-
-                // Decrease active counter
-                self.active
-                    .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-
-                return response;
+            if let Some(result) = self.try_acquire_client().await {
+                return result;
             }
 
-            let active_counter = self.active.load(std::sync::atomic::Ordering::SeqCst);
+            // Get number of active client permits
+            let active_counter = self.clients.len() - self.client_permit.available_permits();
 
             // Handle case where all clients are blocked externally, we won't be woken by any clients
             // in this case, so instead of waiting for the notifier we wait a short duration
             //
             // If number of active connections are zero we can assume we are blocked for some reason
             // likely an external factor, we would never get notified so we must poll instead?
-            let externally_blocked = self.is_externally_blocked().await;
-            if externally_blocked || active_counter < 1 {
+            if active_counter < 1 || self.is_externally_blocked().await {
                 debug!("all servers are externally blocked, delaying next attempt");
                 sleep(self.timing.retry_single_external).await;
+            }
+        }
+    }
+
+    /// Attempt to acquire a client that is ready to be used
+    /// and attempt a conversion
+    ///
+    /// Provides a [ActiveClientPermit] when this permit is dropped
+    /// other clients will be notified that the resource is available
+    /// again for use
+    async fn try_acquire_client(
+        &self,
+    ) -> Option<(MutexGuard<'_, LoadBalancedClient>, SemaphorePermit<'_>)> {
+        // Acquire a permit to obtain a client
+        let client_permit = match self.client_permit.acquire().await {
+            Ok(value) => value,
+            Err(_) => return None,
+        };
+
+        let single_client = self.clients.len() > 1;
+        let available_clients = self
+            .clients
+            .iter()
+            // Include index for logging
+            .enumerate()
+            // Filter to only clients that aren't in use
+            .filter_map(|(index, client)| match client.try_lock() {
+                Ok(client_lock) => Some((index, client_lock)),
+                // Server is already in uses
+                Err(_) => None,
+            });
+
+        for (index, mut client_lock) in available_clients {
+            let client = &mut *client_lock;
+
+            // If we have more than one client and this client was already checked for being busy earlier
+            // then this client will be skipped and won't be checked until a later point
+            if let (false, Some(busy_externally_at)) = (single_client, client.busy_externally_at) {
+                let now = Instant::now();
+                let since_check = now.duration_since(busy_externally_at);
+                if since_check < self.timing.retry_busy_check_after {
+                    continue;
+                }
+            }
+
+            // Update client busy state
+            if let Err(err) = client.check_busy().await {
+                error!("failed to perform server busy check at {index}, assuming busy: {err}");
+
+                // Erroneous clients are considered busy
+                client.busy_externally_at = Some(Instant::now());
                 continue;
             }
 
-            debug!("no available servers, waiting until one is available");
+            // Client is busy (Externally)
+            if client.busy_externally_at.is_some() {
+                debug!("server at {index} is busy externally");
+                continue;
+            }
 
-            // All servers are in use, wait for the free notifier, this has a timeout
-            // incase a complication occurs
-            _ = timeout(self.timing.notify_timeout, self.free_notify.notified()).await;
+            debug!("obtained available server {index} for convert");
+            return Some((client_lock, client_permit));
         }
+
+        None
     }
 }
