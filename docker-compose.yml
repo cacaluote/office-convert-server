@@ -8,21 +8,20 @@ services:
       - "3000:3000"
     environment:
       RUST_LOG: debug
-
-  # office_convert_server_2:
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile
-  #   container_name: office_convert_server_2
-  #   ports:
-  #     - "3001:3000"
-  # office_convert_server_3:
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile
-  #   container_name: office_convert_server_3
-  #   ports:
-  #     - "3002:3000"
+  office_convert_server_2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: office_convert_server_2
+    ports:
+      - "3001:3000"
+  office_convert_server_3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: office_convert_server_3
+    ports:
+      - "3002:3000"
   # office_convert_server_4:
   #   build:
   #     context: .
