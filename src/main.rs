@@ -38,9 +38,19 @@ struct Args {
     /// Host to bind the server to, defaults to 0.0.0.0
     #[arg(long)]
     host: Option<String>,
+
+    /// Disable automatic garbage collection
+    /// (Normally garbage collection runs between each request)
+    #[arg(long)]
+    no_automatic_collection: Option<bool>,
 }
 
-#[tokio::main]
+#[derive(Debug)]
+struct RuntimeConfig {
+    no_automatic_collection: bool,
+}
+
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     _ = dotenvy::dotenv();
 
@@ -61,6 +71,10 @@ async fn main() -> anyhow::Result<()> {
     tracing::subscriber::set_global_default(subscriber)?;
 
     let args = Args::parse();
+
+    let runtime_config = RuntimeConfig {
+        no_automatic_collection: args.no_automatic_collection.unwrap_or_default(),
+    };
 
     let mut office_path: Option<PathBuf> = None;
 
@@ -103,7 +117,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Create office access and get office details
-    let (office_details, office_handle) = create_office_runner(office_path).await?;
+    let (office_details, office_handle) = create_office_runner(office_path, runtime_config).await?;
 
     // Create the router
     let app = Router::new()
@@ -155,7 +169,10 @@ pub struct OfficeHandle(mpsc::Sender<OfficeMsg>);
 
 /// Creates a new office runner on its own thread providing
 /// a handle to access it via messages
-async fn create_office_runner(path: PathBuf) -> anyhow::Result<(OfficeDetails, OfficeHandle)> {
+async fn create_office_runner(
+    path: PathBuf,
+    config: RuntimeConfig,
+) -> anyhow::Result<(OfficeDetails, OfficeHandle)> {
     let (tx, rx) = mpsc::channel(1);
 
     let (startup_tx, startup_rx) = oneshot::channel();
@@ -163,7 +180,7 @@ async fn create_office_runner(path: PathBuf) -> anyhow::Result<(OfficeDetails, O
     std::thread::spawn(move || {
         let mut startup_tx = Some(startup_tx);
 
-        if let Err(cause) = office_runner(path, rx, &mut startup_tx) {
+        if let Err(cause) = office_runner(path, config, rx, &mut startup_tx) {
             error!(%cause, "failed to start office runner");
 
             // Send the error to the startup channel if its still available
@@ -194,6 +211,7 @@ struct OfficeDetails {
 /// Main event loop for an office runner
 fn office_runner(
     path: PathBuf,
+    config: RuntimeConfig,
     mut rx: mpsc::Receiver<OfficeMsg>,
     startup_tx: &mut Option<oneshot::Sender<anyhow::Result<OfficeDetails>>>,
 ) -> anyhow::Result<()> {
@@ -208,6 +226,17 @@ fn office_runner(
         .take(10)
         .map(|value| value as char)
         .collect::<String>();
+
+    // Use our own special temp directory
+    let tmp_dir = tmp_dir.join("office-convert-server");
+
+    // Delete the temp directory if it already exists
+    if tmp_dir.exists() {
+        std::fs::remove_dir_all(&tmp_dir).context("failed to remove old temporary directory")?;
+    }
+
+    // create the directory
+    std::fs::create_dir_all(&tmp_dir).context("failed to create temporary directory")?;
 
     // Create input and output paths
     let temp_in = tmp_dir.join(format!("lo_native_input_{random_id}"));
@@ -287,6 +316,11 @@ fn office_runner(
         // Convert document
         let result = convert_document(&office, temp_in, temp_out, input, &runner_state);
 
+        if !config.no_automatic_collection {
+            // Attempt to free up some memory
+            _ = office.trim_memory(1000);
+        }
+
         // Send response
         _ = output.send(result);
 
@@ -344,9 +378,6 @@ fn convert_document(
 
     // Convert document
     let result = doc.save_as(&out_url, "pdf", None)?;
-
-    // Attempt to free up some memory
-    _ = office.trim_memory(1000);
 
     if !result {
         return Err(anyhow!("failed to convert file"));
