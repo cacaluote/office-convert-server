@@ -18,7 +18,10 @@ use parking_lot::Mutex;
 use rand::{distributions::Alphanumeric, Rng};
 use serde::Serialize;
 use std::{env::temp_dir, ffi::CStr, path::PathBuf, rc::Rc, sync::Arc};
-use tokio::sync::{mpsc, oneshot};
+use tokio::{
+    signal::ctrl_c,
+    sync::{mpsc, oneshot},
+};
 use tracing::{debug, error};
 use tracing_subscriber::EnvFilter;
 
@@ -41,7 +44,7 @@ struct Args {
 
     /// Disable automatic garbage collection
     /// (Normally garbage collection runs between each request)
-    #[arg(long)]
+    #[arg(long, short)]
     no_automatic_collection: Option<bool>,
 }
 
@@ -75,6 +78,8 @@ async fn main() -> anyhow::Result<()> {
     let runtime_config = RuntimeConfig {
         no_automatic_collection: args.no_automatic_collection.unwrap_or_default(),
     };
+
+    tracing::debug!(?runtime_config, "starting server");
 
     let mut office_path: Option<PathBuf> = None;
 
@@ -139,6 +144,10 @@ async fn main() -> anyhow::Result<()> {
 
     // Serve the app from the listener
     axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            _ = ctrl_c().await;
+            tracing::debug!("server shutting down");
+        })
         .await
         .context("failed to serve")?;
 
@@ -343,6 +352,8 @@ fn convert_document(
 
     runner_state: &Rc<Mutex<RunnerState>>,
 ) -> anyhow::Result<Bytes> {
+    tracing::debug!("converting document");
+
     let in_url = temp_in.doc_url()?;
     let out_url = temp_out.doc_url()?;
 
