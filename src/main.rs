@@ -365,7 +365,7 @@ fn convert_document(
     std::fs::write(&temp_in.path, input).context("failed to write temp input")?;
 
     // Load document
-    let mut doc = match office.document_load_with_options(&in_url, r#"Batch=1,{"Password": ""}"#) {
+    let mut doc = match office.document_load_with_options(&in_url, "InteractionHandler=0,Batch=1") {
         Ok(value) => value,
         Err(err) => match err {
             OfficeError::OfficeError(err) => {
