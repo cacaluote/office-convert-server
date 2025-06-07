@@ -25,6 +25,9 @@ use tokio::{
 use tracing::{debug, error};
 use tracing_subscriber::EnvFilter;
 
+use crate::encrypted::is_likely_encrypted;
+
+mod encrypted;
 mod error;
 
 #[derive(Parser, Debug)]
@@ -356,12 +359,13 @@ fn convert_document(
 
     let in_url = temp_in.doc_url()?;
     let out_url = temp_out.doc_url()?;
+    let is_likely_encrypted = is_likely_encrypted(&input);
 
     // Write to temp file
     std::fs::write(&temp_in.path, input).context("failed to write temp input")?;
 
     // Load document
-    let mut doc = match office.document_load_with_options(&in_url, "InteractionHandler=0,Batch=1") {
+    let mut doc = match office.document_load_with_options(&in_url, r#"Batch=1,{"Password": ""}"#) {
         Ok(value) => value,
         Err(err) => match err {
             OfficeError::OfficeError(err) => {
@@ -376,6 +380,11 @@ fn convert_document(
 
                 // File is malformed or corrupted
                 if err.contains("loadComponentFromURL returned an empty reference") {
+                    // The file is probably encrypted
+                    if !is_likely_encrypted {
+                        return Err(anyhow!("file is encrypted"));
+                    }
+
                     return Err(anyhow!("file is corrupted"));
                 }
 
