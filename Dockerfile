@@ -1,5 +1,5 @@
 #  Builder part
-FROM rust:1.80.0-slim-bookworm AS builder
+FROM rust:1.87.0-slim-bookworm AS builder
 
 WORKDIR /app
 
@@ -36,7 +36,7 @@ WORKDIR /app
 # Install dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl ca-certificates
-    
+
 # Install stable libreoffice from backports
 RUN apt-get install -t bookworm-backports -y libreoffice
 
