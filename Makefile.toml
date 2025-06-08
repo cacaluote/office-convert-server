@@ -4,11 +4,19 @@ env_files = [{ path = ".env" }]
 
 # Build Windows and Linux in parallel (Cross compiling with cargo cross) 
 [tasks.build-all]
-run_task = { name = ["build-windows", "build-linux"], parallel = true }
+run_task = { name = [
+    "build-windows",
+    "build-linux",
+    "build-linux-arm64",
+], parallel = true }
 
 # Build a Linux build
 [tasks.build-linux]
 run_task = [{ name = ["build-linux-binary", "copy-build-linux"] }]
+
+# Build a Linux build
+[tasks.build-linux-arm64]
+run_task = [{ name = ["build-linux-arm64-binary", "copy-build-linux-arm64"] }]
 
 # Build a Windows Build
 [tasks.build-windows]
@@ -99,6 +107,17 @@ script_runner = "@shell"
 script = "cp target/x86_64-unknown-linux-gnu/release/office-convert-server .release/binaries/office-convert-server"
 dependencies = ["create-release-dir"]
 
+# Build the arm64 linux version (Requires cross be installed)
+[tasks.build-linux-arm64-binary]
+command = "cross"
+args = ["build", "--target", "aarch64-unknown-linux-gnu", "--release"]
+
+# Copy the arm64 linux build to the releases folder
+[tasks.copy-build-linux-arm64]
+script_runner = "@shell"
+script = "cp target/aarch64-unknown-linux-gnu/release/office-convert-server .release/binaries/office-convert-server-arm64"
+dependencies = ["create-release-dir"]
+
 # Build a Windows binary from a linux host
 [tasks.build-windows-binary]
 command = "cross"
@@ -109,7 +128,6 @@ args = ["build", "--target", "x86_64-pc-windows-gnu", "--release"]
 script_runner = "@shell"
 script = "cp target/x86_64-pc-windows-gnu/release/office-convert-server.exe .release/binaries/office-convert-server.exe"
 dependencies = ["create-release-dir"]
-
 
 # Create releases directory
 [tasks.create-release-dir]
