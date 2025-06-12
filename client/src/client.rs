@@ -43,6 +43,18 @@ pub enum RequestError {
     },
 }
 
+impl RequestError {
+    // Whether a retry attempt should be made
+    pub fn is_retry(&self) -> bool {
+        matches!(
+            self,
+            RequestError::RequestFailed(_)
+                | RequestError::InvalidResponse(_)
+                | RequestError::ServerConnectTimeout
+        )
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct StatusResponse {
     pub is_busy: bool,

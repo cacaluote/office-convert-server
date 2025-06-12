@@ -2,7 +2,10 @@ use bytes::Bytes;
 use office_convert_client::{OfficeConvertClient, OfficeConvertLoadBalancer};
 use std::sync::Arc;
 use testcontainers::{
-    core::{wait::HttpWaitStrategy, IntoContainerPort, WaitFor},
+    core::{
+        logs::consumer::logging_consumer::LoggingConsumer, wait::HttpWaitStrategy,
+        IntoContainerPort, WaitFor,
+    },
     runners::AsyncRunner,
     GenericImage, ImageExt,
 };
@@ -10,12 +13,17 @@ use tokio::sync::Barrier;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn attempt_spam() {
-    let container = GenericImage::new("jacobtread/office-convert-server", "latest")
+    std::env::set_var("RUST_LOG", "debug");
+
+    tracing_subscriber::fmt().init();
+
+    let container = GenericImage::new("jacobtread/office-convert-server", "0.2.2")
         .with_exposed_port(3000.tcp())
         .with_wait_for(WaitFor::http(
             HttpWaitStrategy::new("/status").with_expected_status_code(200u16),
         ))
         .with_env_var("RUST_LOG", "debug")
+        .with_log_consumer(LoggingConsumer::new())
         .start()
         .await
         .unwrap();
@@ -25,7 +33,7 @@ async fn attempt_spam() {
     let client_url = format!("http://{host}:{host_port}");
 
     // Number of load balancers
-    let sets = 1;
+    let sets = 5;
 
     // Number of "Convert this" per "set"
     let tasks = 10;
@@ -50,7 +58,9 @@ async fn attempt_spam() {
             let file = file.clone();
             tokio::spawn(async move {
                 println!("start job set = {set}, task = {task}");
-                lb.convert(file).await.unwrap();
+                if let Err(err) = lb.convert(file).await {
+                    eprintln!("Failed conversion: {err:#?}")
+                }
                 println!("end job set = {set}, task = {task}");
                 barrier.wait().await;
             });

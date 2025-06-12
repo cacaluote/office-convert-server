@@ -8,21 +8,25 @@ use tokio::{
 };
 use tracing::{debug, error};
 
-pub struct LoadBalancerTiming {
+pub struct LoadBalancerConfig {
     /// Time in-between external busy checks
     pub retry_busy_check_after: Duration,
     /// Time to wait before repeated attempts
     pub retry_single_external: Duration,
     /// Timeout to wait on the notifier for
     pub notify_timeout: Duration,
+    /// Number of attempts to retry a file for if the
+    /// request fails due to connection loss
+    pub retry_attempts: usize,
 }
 
-impl Default for LoadBalancerTiming {
+impl Default for LoadBalancerConfig {
     fn default() -> Self {
         Self {
             retry_busy_check_after: Duration::from_secs(5),
             retry_single_external: Duration::from_secs(1),
             notify_timeout: Duration::from_secs(120),
+            retry_attempts: 3,
         }
     }
 }
@@ -54,7 +58,7 @@ pub struct OfficeConvertLoadBalancer {
     client_permit: Semaphore,
 
     /// Timing for various actions
-    timing: LoadBalancerTiming,
+    config: LoadBalancerConfig,
 }
 
 enum TryAcquireResult<'a> {
@@ -92,7 +96,7 @@ impl OfficeConvertLoadBalancer {
     /// ## Arguments
     /// * `clients` - The clients to load balance amongst
     /// * `timing` - Timing configuration
-    pub fn new_with_timing<I>(clients: I, timing: LoadBalancerTiming) -> Self
+    pub fn new_with_timing<I>(clients: I, timing: LoadBalancerConfig) -> Self
     where
         I: IntoIterator<Item = OfficeConvertClient>,
     {
@@ -111,13 +115,40 @@ impl OfficeConvertLoadBalancer {
         Self {
             clients,
             client_permit: Semaphore::new(total_clients),
-            timing,
+            config: timing,
         }
     }
 
     pub async fn convert(&self, file: Bytes) -> Result<bytes::Bytes, RequestError> {
-        let (client, _client_permit) = self.acquire_client().await;
-        client.client.convert(file).await
+        let mut attempt = 0;
+
+        let error = loop {
+            let (client, _client_permit) = self.acquire_client().await;
+
+            match client.client.convert(file.clone()).await {
+                Ok(value) => return Ok(value),
+                Err(error) => {
+                    if error.is_retry() {
+                        tracing::error!(
+                            ?error,
+                            "connection error while attempting to convert, retrying"
+                        );
+
+                        attempt += 1;
+
+                        if attempt <= self.config.retry_attempts {
+                            continue;
+                        }
+
+                        break error;
+                    }
+
+                    return Err(error);
+                }
+            }
+        };
+
+        Err(error)
     }
 
     /// Acquire a client, will wait until a new client is available
@@ -217,7 +248,7 @@ impl OfficeConvertLoadBalancer {
 
             // Compute the next busy check timestamp for the client
             let next_busy_check = Instant::now()
-                .checked_add(self.timing.retry_busy_check_after)
+                .checked_add(self.config.retry_busy_check_after)
                 .expect("time overflowed");
             slot.next_busy_check = Some(next_busy_check);
 
