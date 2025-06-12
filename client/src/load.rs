@@ -4,7 +4,7 @@ use std::time::Duration;
 use thiserror::Error;
 use tokio::{
     sync::{Mutex, MutexGuard, Semaphore, SemaphorePermit},
-    time::{sleep_until, Instant},
+    time::{Instant, sleep_until},
 };
 use tracing::{debug, error};
 
@@ -181,10 +181,6 @@ impl OfficeConvertLoadBalancer {
 
     /// Attempt to acquire a client that is ready to be used
     /// and attempt a conversion
-    ///
-    /// Provides a [ActiveClientPermit] when this permit is dropped
-    /// other clients will be notified that the resource is available
-    /// again for use
     async fn try_acquire_client(&self) -> TryAcquireResult<'_> {
         // Acquire a permit to obtain a client
         let client_permit = self
