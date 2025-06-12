@@ -1,10 +1,10 @@
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use axum::{
+    Extension, Json, Router,
     body::Body,
     extract::DefaultBodyLimit,
-    http::{header, HeaderValue, Response, StatusCode},
+    http::{HeaderValue, Response, StatusCode, header},
     routing::{get, post},
-    Extension, Json, Router,
 };
 use axum_typed_multipart::{FieldData, TryFromMultipart, TypedMultipart};
 use bytes::Bytes;
@@ -14,10 +14,9 @@ use libreofficekit::{
     CallbackType, DocUrl, FilterTypes, Office, OfficeError, OfficeOptionalFeatures,
     OfficeVersionInfo,
 };
-use parking_lot::Mutex;
-use rand::{distributions::Alphanumeric, Rng};
+use rand::{Rng, distributions::Alphanumeric};
 use serde::Serialize;
-use std::{env::temp_dir, ffi::CStr, path::PathBuf, rc::Rc, sync::Arc};
+use std::{env::temp_dir, ffi::CStr, path::PathBuf, sync::Arc};
 use tokio::{
     signal::ctrl_c,
     sync::{mpsc, oneshot},
@@ -209,11 +208,6 @@ async fn create_office_runner(
     Ok((office_details, office_handle))
 }
 
-#[derive(Debug, Default)]
-struct RunnerState {
-    password_requested: bool,
-}
-
 #[derive(Debug)]
 struct OfficeDetails {
     filter_types: Option<FilterTypes>,
@@ -254,8 +248,6 @@ fn office_runner(
     let temp_in = tmp_dir.join(format!("lo_native_input_{random_id}"));
     let temp_out = tmp_dir.join(format!("lo_native_output_{random_id}.pdf"));
 
-    let runner_state = Rc::new(Mutex::new(RunnerState::default()));
-
     // Allow prompting for passwords
     office
         .set_optional_features(OfficeOptionalFeatures::DOCUMENT_PASSWORD)
@@ -267,17 +259,12 @@ fn office_runner(
 
     office
         .register_callback({
-            let runner_state = runner_state.clone();
             let input_url = DocUrl::from_path(&temp_in).context("failed to create input url")?;
 
             move |office, ty, payload| {
                 debug!(?ty, "callback invoked");
 
-                let state = &mut *runner_state.lock();
-
                 if let CallbackType::DocumentPassword = ty {
-                    state.password_requested = true;
-
                     // Provide now password
                     if let Err(cause) = office.set_document_password(&input_url, None) {
                         error!(?cause, "failed to set document password");
@@ -326,7 +313,7 @@ fn office_runner(
         };
 
         // Convert document
-        let result = convert_document(&office, temp_in, temp_out, input, &runner_state);
+        let result = convert_document(&office, temp_in, temp_out, input);
 
         if !config.no_automatic_collection {
             // Attempt to free up some memory
@@ -335,9 +322,6 @@ fn office_runner(
 
         // Send response
         _ = output.send(result);
-
-        // Reset runner state
-        *runner_state.lock() = RunnerState::default();
     }
 
     Ok(())
@@ -352,8 +336,6 @@ fn convert_document(
     temp_out: TempFile,
 
     input: Bytes,
-
-    runner_state: &Rc<Mutex<RunnerState>>,
 ) -> anyhow::Result<Bytes> {
     tracing::debug!("converting document");
 
@@ -370,8 +352,6 @@ fn convert_document(
         Err(err) => match err {
             OfficeError::OfficeError(err) => {
                 error!(%err, "failed to load document");
-
-                let _state = &*runner_state.lock();
 
                 // File was encrypted with a password
                 if err.contains("Unsupported URL") {

@@ -1420,7 +1420,6 @@ dependencies = [
  "clap",
  "dotenvy",
  "libreofficekit",
- "parking_lot",
  "rand 0.8.5",
  "serde",
  "serde_json",
@@ -1428,7 +1427,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "url",
 ]
 
 [[package]]
