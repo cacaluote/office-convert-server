@@ -50,6 +50,6 @@ COPY --from=builder /app/target/x86_64-unknown-linux-gnu/release/office-convert-
 ENV LIBREOFFICE_SDK_PATH=/usr/lib/libreoffice/program
 ENV SERVER_ADDRESS=0.0.0.0:3000 
 
-EXPOSE 8080
+EXPOSE 3000
 
 CMD ["/app/office-convert-server"]
