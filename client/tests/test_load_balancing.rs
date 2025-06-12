@@ -13,7 +13,7 @@ use tokio::sync::Barrier;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn attempt_spam() {
-    std::env::set_var("RUST_LOG", "debug");
+    unsafe { std::env::set_var("RUST_LOG", "debug") };
 
     tracing_subscriber::fmt().init();
 
