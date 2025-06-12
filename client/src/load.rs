@@ -1,7 +1,6 @@
 use crate::{OfficeConvertClient, RequestError};
 use bytes::Bytes;
 use std::time::Duration;
-use thiserror::Error;
 use tokio::{
     sync::{Mutex, MutexGuard, Semaphore, SemaphorePermit},
     time::{Instant, sleep_until},
@@ -29,12 +28,6 @@ impl Default for LoadBalancerConfig {
             retry_attempts: 3,
         }
     }
-}
-
-#[derive(Debug, Error)]
-pub enum LoadBalanceError {
-    #[error("no servers available for load balancing")]
-    NoServers,
 }
 
 struct ClientSlot {

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 pub use client::{ClientOptions, CreateError, OfficeConvertClient, RequestError};
-pub use load::{LoadBalanceError, OfficeConvertLoadBalancer};
+pub use load::OfficeConvertLoadBalancer;
 
 /// Office converter
 #[derive(Clone)]
