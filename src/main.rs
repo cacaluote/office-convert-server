@@ -24,7 +24,7 @@ use tokio::{
 use tracing::{debug, error};
 use tracing_subscriber::EnvFilter;
 
-use crate::encrypted::is_likely_encrypted;
+use crate::encrypted::get_file_condition;
 
 mod encrypted;
 mod error;
@@ -341,7 +341,7 @@ fn convert_document(
 
     let in_url = temp_in.doc_url()?;
     let out_url = temp_out.doc_url()?;
-    let is_likely_encrypted = is_likely_encrypted(&input);
+    let file_condition = get_file_condition(&input);
 
     // Write to temp file
     std::fs::write(&temp_in.path, input).context("failed to write temp input")?;
@@ -360,12 +360,15 @@ fn convert_document(
 
                 // File is malformed or corrupted
                 if err.contains("loadComponentFromURL returned an empty reference") {
-                    // The file is probably encrypted
-                    if !is_likely_encrypted {
-                        return Err(anyhow!("file is encrypted"));
-                    }
-
-                    return Err(anyhow!("file is corrupted"));
+                    return match file_condition {
+                        encrypted::FileCondition::Normal => Err(anyhow!("file is corrupted")),
+                        encrypted::FileCondition::LikelyCorrupted => {
+                            Err(anyhow!("file is corrupted"))
+                        }
+                        encrypted::FileCondition::LikelyEncrypted => {
+                            Err(anyhow!("file is encrypted"))
+                        }
+                    };
                 }
 
                 return Err(OfficeError::OfficeError(err).into());
