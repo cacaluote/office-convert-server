@@ -2,12 +2,12 @@ use bytes::Bytes;
 use office_convert_client::{OfficeConvertClient, OfficeConvertLoadBalancer};
 use std::sync::Arc;
 use testcontainers::{
+    GenericImage, ImageExt,
     core::{
-        logs::consumer::logging_consumer::LoggingConsumer, wait::HttpWaitStrategy,
-        IntoContainerPort, WaitFor,
+        IntoContainerPort, WaitFor, logs::consumer::logging_consumer::LoggingConsumer,
+        wait::HttpWaitStrategy,
     },
     runners::AsyncRunner,
-    GenericImage, ImageExt,
 };
 use tokio::sync::Barrier;
 

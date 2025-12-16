@@ -91,10 +91,10 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Try loading office path from environment variables
-    if office_path.is_none() {
-        if let Ok(path) = std::env::var("LIBREOFFICE_SDK_PATH") {
-            office_path = Some(PathBuf::from(&path));
-        }
+    if office_path.is_none()
+        && let Ok(path) = std::env::var("LIBREOFFICE_SDK_PATH")
+    {
+        office_path = Some(PathBuf::from(&path));
     }
 
     // Try determine default office path
