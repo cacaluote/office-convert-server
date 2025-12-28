@@ -1,5 +1,5 @@
 #  Builder part
-FROM rust:1.87.0-slim-bookworm AS builder
+FROM rust:1.91.0-slim-bookworm AS builder
 
 WORKDIR /app
 
@@ -48,7 +48,7 @@ RUN apt-get clean && \
 COPY --from=builder /app/target/x86_64-unknown-linux-gnu/release/office-convert-server ./
 
 ENV LIBREOFFICE_SDK_PATH=/usr/lib/libreoffice/program
-ENV SERVER_ADDRESS=0.0.0.0:3000 
+ENV SERVER_ADDRESS=0.0.0.0:3000
 
 EXPOSE 3000
 
