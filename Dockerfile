@@ -7,15 +7,16 @@ WORKDIR /app
 COPY Cargo.toml .
 COPY Cargo.lock .
 COPY client/Cargo.toml ./client/Cargo.toml
+
 RUN mkdir src && echo "fn main() {}" >src/main.rs
 RUN mkdir client/src && echo "fn main() {}" >client/src/main.rs
-RUN cargo build --target x86_64-unknown-linux-gnu --release
+RUN cargo build --release
 
 COPY src src
 COPY client/src client/src
 RUN touch src/main.rs
 
-RUN cargo build --target x86_64-unknown-linux-gnu --release
+RUN cargo build --release
 
 # ----------------------------------------
 # Runner part
@@ -29,7 +30,6 @@ RUN echo 'deb http://deb.debian.org/debian/ bookworm main' > /etc/apt/sources.li
 
 # Bookworm backports for latest available LibreOffice version
 RUN echo 'deb http://deb.debian.org/debian bookworm-backports main' > /etc/apt/sources.list.d/bookworm-backports.list
-
 
 WORKDIR /app
 
@@ -45,7 +45,7 @@ RUN apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy the built binary
-COPY --from=builder /app/target/x86_64-unknown-linux-gnu/release/office-convert-server ./
+COPY --from=builder /app/target/release/office-convert-server ./
 
 ENV LIBREOFFICE_SDK_PATH=/usr/lib/libreoffice/program
 ENV SERVER_ADDRESS=0.0.0.0:3000
