@@ -1617,7 +1617,7 @@ dependencies = [
 
 [[package]]
 name = "office-convert-client"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "bytes",
  "reqwest 0.13.1",
@@ -1632,7 +1632,7 @@ dependencies = [
 
 [[package]]
 name = "office-convert-server"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1641,13 +1641,13 @@ dependencies = [
  "clap",
  "dotenvy",
  "libreofficekit",
- "rand 0.8.5",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -3189,6 +3189,7 @@ version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2e054861b4bd027cd373e18e8d8d8e6548085000e41290d95ce0c373a654b4a"
 dependencies = [
+ "getrandom 0.3.4",
  "js-sys",
  "wasm-bindgen",
 ]

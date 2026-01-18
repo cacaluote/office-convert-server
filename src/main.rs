@@ -14,7 +14,6 @@ use libreofficekit::{
     CallbackType, DocUrl, FilterTypes, Office, OfficeError, OfficeOptionalFeatures,
     OfficeVersionInfo,
 };
-use rand::{Rng, distributions::Alphanumeric};
 use serde::Serialize;
 use std::{env::temp_dir, ffi::CStr, path::PathBuf, sync::Arc};
 use tokio::{
@@ -23,6 +22,7 @@ use tokio::{
 };
 use tracing::{debug, error};
 use tracing_subscriber::EnvFilter;
+use uuid::Uuid;
 
 use crate::encrypted::get_file_condition;
 
@@ -227,11 +227,7 @@ fn office_runner(
     let tmp_dir = temp_dir();
 
     // Generate random ID for the path name
-    let random_id = rand::thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(10)
-        .map(|value| value as char)
-        .collect::<String>();
+    let random_id = Uuid::new_v4().simple();
 
     // Use our own special temp directory
     let tmp_dir = tmp_dir.join("office-convert-server");
