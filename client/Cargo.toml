@@ -10,24 +10,17 @@ description = "Client library for interacting with office-convert-server"
 
 [dependencies]
 # Cheap bytes type
-bytes = "1.7"
+bytes = "1"
 
 # HTTP client
-reqwest = { version = "0.12", default-features = false, features = [
-    "json",
-    "charset",
-    "multipart",
-    "rustls-tls",
-    "http2",
-    "macos-system-configuration",
-] }
+reqwest = { version = "0.13", features = [ "json", "multipart" ] }
 
 # JSON and (de)serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # Error handling
-thiserror = "1"
+thiserror = "2"
 
 # Asynchronous primitives
 tokio = { version = "1", features = ["sync", "time", "parking_lot"] }
@@ -37,5 +30,5 @@ tracing = "0.1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
-testcontainers = { version = "0.24.0", features = ["http_wait"] }
+testcontainers = { version = "0.26.3", features = ["http_wait"] }
 tracing-subscriber = "0.3"
