@@ -3,7 +3,7 @@ use axum::{
     Extension, Json, Router,
     body::Body,
     extract::DefaultBodyLimit,
-    http::{HeaderValue, Response, StatusCode, header},
+    http::{HeaderMap, HeaderValue, Response, StatusCode, header},
     routing::{get, post},
 };
 use axum_typed_multipart::{FieldData, TryFromMultipart, TypedMultipart};
@@ -502,7 +502,29 @@ async fn supported_formats(
 /// POST /collect-garbage
 ///
 /// Collects garbage from the office converter
-async fn collect_garbage(Extension(office): Extension<OfficeHandle>) -> StatusCode {
+async fn collect_garbage(
+    Extension(office): Extension<OfficeHandle>,
+    headers: HeaderMap,
+) -> StatusCode {
+    // This endpoint does not accept a request body. Reject body-related headers
+    // early so clients that accidentally upload multipart data fail fast.
+    if headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_some_and(|length| length > 0)
+    {
+        return StatusCode::PAYLOAD_TOO_LARGE;
+    }
+
+    if headers.contains_key(header::TRANSFER_ENCODING) {
+        return StatusCode::PAYLOAD_TOO_LARGE;
+    }
+
+    if headers.contains_key(header::CONTENT_TYPE) {
+        return StatusCode::UNSUPPORTED_MEDIA_TYPE;
+    }
+
     _ = office.0.send(OfficeMsg::CollectGarbage).await;
     StatusCode::OK
 }
