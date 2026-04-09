@@ -472,6 +472,10 @@ async fn convert(
 ) -> Result<Response<Body>, DynHttpError> {
     let (tx, rx) = oneshot::channel();
     let output_name = build_pdf_filename(file.metadata.file_name.as_deref());
+    let content_disposition = format!(
+        "attachment; filename*=UTF-8''{}",
+        percent_encode_header_value(&output_name)
+    );
 
     // Convert the file
     office
@@ -494,7 +498,7 @@ async fn convert(
         )
         .header(
             header::CONTENT_DISPOSITION,
-            HeaderValue::from_str(&format!("attachment; filename=\"{output_name}\""))
+            HeaderValue::from_str(&content_disposition)
                 .context("failed to create content disposition header")?,
         )
         .body(Body::from(converted))
@@ -517,21 +521,34 @@ fn build_pdf_filename(input_name: Option<&str>) -> String {
         .filter(|value| !value.is_empty())
         .unwrap_or("converted");
 
-    // Keep the filename header ASCII-safe and avoid breaking quoted strings.
-    let safe_stem: String = stem
-        .chars()
-        .map(|ch| match ch {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '-' | '_' | ' ' => ch,
-            _ => '_',
-        })
-        .collect();
+    format!("{stem}.pdf")
+}
 
-    let safe_stem = safe_stem.trim();
-    if safe_stem.is_empty() {
-        fallback.to_string()
-    } else {
-        format!("{safe_stem}.pdf")
+fn percent_encode_header_value(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+
+    for byte in value.as_bytes() {
+        match byte {
+            b'a'..=b'z'
+            | b'A'..=b'Z'
+            | b'0'..=b'9'
+            | b'!'
+            | b'#'
+            | b'$'
+            | b'&'
+            | b'+'
+            | b'-'
+            | b'.'
+            | b'^'
+            | b'_'
+            | b'`'
+            | b'|'
+            | b'~' => encoded.push(*byte as char),
+            _ => encoded.push_str(&format!("%{:02X}", byte)),
+        }
     }
+
+    encoded
 }
 
 /// Result from checking the server busy state
