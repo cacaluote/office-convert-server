@@ -15,7 +15,12 @@ use libreofficekit::{
     OfficeVersionInfo,
 };
 use serde::Serialize;
-use std::{env::temp_dir, ffi::CStr, path::PathBuf, sync::Arc};
+use std::{
+    env::temp_dir,
+    ffi::CStr,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tokio::{
     signal::ctrl_c,
     sync::{mpsc, oneshot},
@@ -118,11 +123,11 @@ async fn main() -> anyhow::Result<()> {
     // Determine the address to run the server on
     let server_address = if args.host.is_some() || args.port.is_some() {
         let host = args.host.unwrap_or_else(|| "0.0.0.0".to_string());
-        let port = args.port.unwrap_or(8080);
+        let port = args.port.unwrap_or(3000);
 
         format!("{host}:{port}")
     } else {
-        std::env::var("SERVER_ADDRESS").context("missing SERVER_ADDRESS")?
+        std::env::var("SERVER_ADDRESS").unwrap_or_else(|_| "0.0.0.0:3000".to_string())
     };
 
     // Create office access and get office details
@@ -466,6 +471,7 @@ async fn convert(
     TypedMultipart(UploadAssetRequest { file }): TypedMultipart<UploadAssetRequest>,
 ) -> Result<Response<Body>, DynHttpError> {
     let (tx, rx) = oneshot::channel();
+    let output_name = build_pdf_filename(file.metadata.file_name.as_deref());
 
     // Convert the file
     office
@@ -486,10 +492,46 @@ async fn convert(
             header::CONTENT_TYPE,
             HeaderValue::from_static("application/pdf"),
         )
+        .header(
+            header::CONTENT_DISPOSITION,
+            HeaderValue::from_str(&format!("attachment; filename=\"{output_name}\""))
+                .context("failed to create content disposition header")?,
+        )
         .body(Body::from(converted))
         .context("failed to create response")?;
 
     Ok(response)
+}
+
+fn build_pdf_filename(input_name: Option<&str>) -> String {
+    let fallback = "converted.pdf";
+
+    let Some(input_name) = input_name else {
+        return fallback.to_string();
+    };
+
+    let stem = Path::new(input_name)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("converted");
+
+    // Keep the filename header ASCII-safe and avoid breaking quoted strings.
+    let safe_stem: String = stem
+        .chars()
+        .map(|ch| match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '-' | '_' | ' ' => ch,
+            _ => '_',
+        })
+        .collect();
+
+    let safe_stem = safe_stem.trim();
+    if safe_stem.is_empty() {
+        fallback.to_string()
+    } else {
+        format!("{safe_stem}.pdf")
+    }
 }
 
 /// Result from checking the server busy state
