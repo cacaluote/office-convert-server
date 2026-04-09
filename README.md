@@ -7,6 +7,10 @@ Simple server for converting office file formats into PDF files built on top of 
 
 This repository contains two separate crates, the first being `office-convert-server` which is the binary crate for the server itself. The second is `office-convert-client` in the client directory which is a library crate providing a client for interacting with the server as well as providing a load balancing implementation.
 
+> [!NOTE]
+>
+> Spreadsheet conversions automatically apply the LibreOffice equivalent of "Fit all columns on one page" before exporting to PDF. This keeps wide sheets from being split horizontally across multiple pages while still allowing long sheets to continue onto additional pages vertically.
+
 ## Running the server 
 
 > [!IMPORTANT]
@@ -193,6 +197,8 @@ Upload a file for conversion, this takes a multipart form data POST request cont
 a "file" field which is the file to convert.
 
 Will respond with the file converted to PDF format as bytes
+
+For spreadsheet inputs this export path automatically applies "Fit all columns on one page" before the PDF is generated. This is not the same as `SinglePageSheets`: long sheets still paginate vertically.
 
 ### POST /collect-garbage (Tell LibreOffice to clean up memory)
 

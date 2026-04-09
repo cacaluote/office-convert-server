@@ -11,7 +11,7 @@ use bytes::Bytes;
 use clap::Parser;
 use error::DynHttpError;
 use libreofficekit::{
-    CallbackType, DocUrl, FilterTypes, Office, OfficeError, OfficeOptionalFeatures,
+    CallbackType, DocUrl, DocumentType, FilterTypes, Office, OfficeError, OfficeOptionalFeatures,
     OfficeVersionInfo,
 };
 use serde::Serialize;
@@ -25,9 +25,11 @@ use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
 use crate::encrypted::get_file_condition;
+use crate::office_profile::{MACRO_URL, bootstrap_profile, profile_installation_url};
 
 mod encrypted;
 mod error;
+mod office_profile;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -221,9 +223,6 @@ fn office_runner(
     mut rx: mpsc::Receiver<OfficeMsg>,
     startup_tx: &mut Option<oneshot::Sender<anyhow::Result<OfficeDetails>>>,
 ) -> anyhow::Result<()> {
-    // Create office instance
-    let office = Office::new(&path).context("failed to create office instance")?;
-
     let tmp_dir = temp_dir();
 
     // Generate random ID for the path name
@@ -240,9 +239,17 @@ fn office_runner(
     // create the directory
     std::fs::create_dir_all(&tmp_dir).context("failed to create temporary directory")?;
 
+    let profile_root = bootstrap_profile(&tmp_dir)?;
+    let profile_url = profile_installation_url(&profile_root)?;
+
+    // Create office instance
+    let office = Office::new_with_profile(&path, &profile_url)
+        .context("failed to create office instance")?;
+
     // Create input and output paths
     let temp_in = tmp_dir.join(format!("lo_native_input_{random_id}"));
     let temp_out = tmp_dir.join(format!("lo_native_output_{random_id}.pdf"));
+    let temp_validation = tmp_dir.join(format!("lo_native_validation_{random_id}.csv"));
 
     // Allow prompting for passwords
     office
@@ -252,6 +259,14 @@ fn office_runner(
     // Load supported filters and office version details
     let filter_types = office.get_filter_types().ok();
     let version = office.get_version_info().ok();
+
+    validate_spreadsheet_macro_runtime(
+        &office,
+        TempFile {
+            path: temp_validation,
+        },
+    )
+    .context("failed to validate spreadsheet scaling macro")?;
 
     office
         .register_callback({
@@ -375,6 +390,18 @@ fn convert_document(
 
     debug!("document loaded");
 
+    let document_type = doc.get_document_type()?;
+
+    if document_type == DocumentType::Spreadsheet {
+        let result = office
+            .run_macro(MACRO_URL)
+            .context("failed to apply spreadsheet print scaling macro")?;
+
+        if !result {
+            return Err(anyhow!("failed to apply spreadsheet print scaling macro"));
+        }
+    }
+
     // Convert document
     let result = doc.save_as(&out_url, "pdf", None)?;
 
@@ -386,6 +413,41 @@ fn convert_document(
     let bytes = std::fs::read(&temp_out.path).context("failed to read temp out file")?;
 
     Ok(Bytes::from(bytes))
+}
+
+fn validate_spreadsheet_macro_runtime(
+    office: &Office,
+    temp_validation: TempFile,
+) -> anyhow::Result<()> {
+    std::fs::write(&temp_validation.path, b"a,b,c,d,e,f\r\n1,2,3,4,5,6\r\n")
+        .context("failed to write spreadsheet macro validation fixture")?;
+
+    let validation_url = temp_validation.doc_url()?;
+    let mut doc = office
+        .document_load_with_options(&validation_url, "InteractionHandler=0,Batch=1")
+        .context("failed to load spreadsheet macro validation document")?;
+
+    let document_type = doc
+        .get_document_type()
+        .context("failed to inspect spreadsheet macro validation document type")?;
+
+    if document_type != DocumentType::Spreadsheet {
+        return Err(anyhow!(
+            "spreadsheet macro validation fixture loaded as unexpected document type"
+        ));
+    }
+
+    let result = office
+        .run_macro(MACRO_URL)
+        .context("failed to execute spreadsheet scaling macro during startup validation")?;
+
+    if !result {
+        return Err(anyhow!(
+            "spreadsheet scaling macro reported failure during startup validation"
+        ));
+    }
+
+    Ok(())
 }
 
 /// Request to convert a file
@@ -544,8 +606,221 @@ impl TempFile {
 impl Drop for TempFile {
     fn drop(&mut self) {
         if self.path.exists() {
-            dbg!(&self.path);
             _ = std::fs::remove_file(&self.path)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lopdf::Document as PdfDocument;
+    use rust_xlsxwriter::Workbook;
+    use std::{
+        path::Path,
+        sync::{Mutex, OnceLock},
+    };
+
+    fn test_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct TestHarness {
+        office: Office,
+        root: PathBuf,
+    }
+
+    impl Drop for TestHarness {
+        fn drop(&mut self) {
+            let root = self.root.clone();
+            drop(self.office.clone());
+            _ = std::fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
+    fn spreadsheet_small_sheet_stays_single_page_wide() -> anyhow::Result<()> {
+        let _guard = test_lock().lock().unwrap();
+        let Some(harness) = TestHarness::new()? else {
+            return Ok(());
+        };
+
+        let workbook_path = harness.root.join("small.xlsx");
+        create_spreadsheet_fixture(&workbook_path, 3)?;
+
+        let pdf = run_conversion(&harness, &std::fs::read(workbook_path)?)?;
+        let page_count = pdf_page_count(&pdf)?;
+
+        assert_eq!(
+            page_count, 1,
+            "expected a single PDF page for the short sheet"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn spreadsheet_long_sheet_still_spans_multiple_pages() -> anyhow::Result<()> {
+        let _guard = test_lock().lock().unwrap();
+        let Some(harness) = TestHarness::new()? else {
+            return Ok(());
+        };
+
+        let workbook_path = harness.root.join("long.xlsx");
+        create_spreadsheet_fixture(&workbook_path, 250)?;
+
+        let pdf = run_conversion(&harness, &std::fs::read(workbook_path)?)?;
+        let page_count = pdf_page_count(&pdf)?;
+
+        assert!(
+            page_count > 1,
+            "expected multiple PDF pages for the long sheet, got {page_count}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn non_spreadsheet_documents_keep_converting() -> anyhow::Result<()> {
+        let _guard = test_lock().lock().unwrap();
+        let Some(harness) = TestHarness::new()? else {
+            return Ok(());
+        };
+
+        let docx = include_bytes!("../client/tests/samples/sample.docx");
+        let pdf = run_conversion(&harness, docx)?;
+
+        assert!(
+            !pdf.is_empty(),
+            "expected DOCX conversion to produce PDF bytes"
+        );
+        assert!(
+            pdf_page_count(&pdf)? >= 1,
+            "expected converted DOCX PDF to have pages"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn startup_validation_fails_when_macro_library_is_missing() -> anyhow::Result<()> {
+        let _guard = test_lock().lock().unwrap();
+        let Some(install_path) = office_install_path() else {
+            return Ok(());
+        };
+
+        let root = create_test_root()?;
+        let profile_root = bootstrap_profile(&root)?;
+
+        std::fs::write(
+            profile_root.join("user").join("basic").join("script.xlc"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE library:libraries PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "libraries.dtd">
+<library:libraries xmlns:library="http://openoffice.org/2000/library" xmlns:xlink="http://www.w3.org/1999/xlink"/>
+"#,
+        )?;
+
+        let profile_url = profile_installation_url(&profile_root)?;
+        let office = Office::new_with_profile(install_path, profile_url)?;
+
+        let result = validate_spreadsheet_macro_runtime(
+            &office,
+            TempFile {
+                path: root.join("validation.csv"),
+            },
+        );
+
+        assert!(
+            result.is_err(),
+            "expected startup validation to fail without the macro"
+        );
+        drop(office);
+        _ = std::fs::remove_dir_all(root);
+        Ok(())
+    }
+
+    impl TestHarness {
+        fn new() -> anyhow::Result<Option<Self>> {
+            let Some(install_path) = office_install_path() else {
+                eprintln!("skipping LibreOffice-dependent test: no install path available");
+                return Ok(None);
+            };
+
+            let root = create_test_root()?;
+            let profile_root = bootstrap_profile(&root)?;
+            let profile_url = profile_installation_url(&profile_root)?;
+
+            let office = Office::new_with_profile(install_path, profile_url)
+                .context("failed to create test office instance")?;
+
+            validate_spreadsheet_macro_runtime(
+                &office,
+                TempFile {
+                    path: root.join("validation.csv"),
+                },
+            )
+            .context("failed to validate test spreadsheet macro runtime")?;
+
+            Ok(Some(Self { office, root }))
+        }
+    }
+
+    fn office_install_path() -> Option<PathBuf> {
+        std::env::var("LIBREOFFICE_SDK_PATH")
+            .ok()
+            .map(PathBuf::from)
+            .or_else(Office::find_install_path)
+    }
+
+    fn create_test_root() -> anyhow::Result<PathBuf> {
+        let root = temp_dir()
+            .join("office-convert-server-tests")
+            .join(Uuid::new_v4().simple().to_string());
+        std::fs::create_dir_all(&root)?;
+        Ok(root)
+    }
+
+    fn create_spreadsheet_fixture(path: &Path, row_count: u32) -> anyhow::Result<()> {
+        let mut workbook = Workbook::new();
+        let worksheet = workbook.add_worksheet();
+
+        for column in 0..6u16 {
+            worksheet.set_column_width(column, 22)?;
+            worksheet.write_string(0, column, format!("Very Wide Header {}", column + 1))?;
+        }
+
+        for row in 1..=row_count {
+            for column in 0..6u16 {
+                worksheet.write_string(
+                    row,
+                    column,
+                    format!("Row {row} Column {} Value For PDF Width", column + 1),
+                )?;
+            }
+        }
+
+        workbook.save(path)?;
+        Ok(())
+    }
+
+    fn run_conversion(harness: &TestHarness, input: &[u8]) -> anyhow::Result<Vec<u8>> {
+        let id = Uuid::new_v4().simple();
+        let temp_in = TempFile {
+            path: harness.root.join(format!("input-{id}.bin")),
+        };
+        let temp_out = TempFile {
+            path: harness.root.join(format!("output-{id}.pdf")),
+        };
+
+        let pdf = convert_document(
+            &harness.office,
+            temp_in,
+            temp_out,
+            Bytes::copy_from_slice(input),
+        )?;
+        Ok(pdf.to_vec())
+    }
+
+    fn pdf_page_count(bytes: &[u8]) -> anyhow::Result<usize> {
+        let document = PdfDocument::load_mem(bytes)?;
+        Ok(document.get_pages().len())
     }
 }
