@@ -38,7 +38,7 @@ thiserror = "2"
 
 # Basic logging
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "local-time"] }
 
 # Command line parsing
 clap = { version = "4.5", features = ["derive"] }

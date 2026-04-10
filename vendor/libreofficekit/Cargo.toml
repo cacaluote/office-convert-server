@@ -29,14 +29,6 @@ repository = "https://github.com/jacobtread/libreofficekit"
 name = "libreofficekit"
 path = "src/lib.rs"
 
-[[test]]
-name = "convert"
-path = "tests/convert.rs"
-
-[[test]]
-name = "instance"
-path = "tests/instance.rs"
-
 [dependencies.bitflags]
 version = "2"
 
@@ -64,6 +56,3 @@ version = "1"
 
 [dependencies.url]
 version = "2.2.2"
-
-[dev-dependencies.tempfile]
-version = "3"
