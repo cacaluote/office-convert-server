@@ -41,6 +41,7 @@ You can provide arguments to the server to control its behavior:
 
 | Argument               | Short Form | Required | Default                   | Description                                     |
 | ---------------------- | ---------- | -------- | ------------------------- | ----------------------------------------------- |
+| `--config <path>`      | None       | No       | None                      | Path to a TOML configuration file               |
 | `--office-path <path>` | None       | No       | Attempt from common paths | Path to the office /program installation folder |
 | `--host <host>`        | None       | No       | 0.0.0.0                   | Host to bind the server on                      |
 | `--port <port>`        | None       | No       | 3000                      | Port to bind the server on                      |
@@ -49,7 +50,7 @@ You can provide arguments to the server to control its behavior:
 
 > [!NOTE]
 >
-> Command line arguments take priority over environment variables and other defaults
+> Command line arguments take priority over environment variables, configuration file values, and other defaults.
 
 ### Environment variables
 
@@ -58,6 +59,35 @@ You can provide arguments to the server to control its behavior:
 | `LIBREOFFICE_SDK_PATH` | No       |              | Path to the office /program installation folder                                                                                                                                                           |
 | `SERVER_ADDRESS`       | No       | 0.0.0.0:3000 | Specifies the socket address to bind the server to                                                                                                                                                        |
 | `RUST_LOG`             | No       |              | Controls the logging behavior, see [Filtering Events with Environment Variables](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/fmt/index.html#filtering-events-with-environment-variables) |
+
+### Configuration file
+
+The server can also load grouped TOML configuration:
+
+```toml
+[office]
+program_path = "C:\\Program Files\\LibreOffice\\program"
+no_automatic_collection = false
+
+[server]
+host = "0.0.0.0"
+port = 3000
+
+[logging]
+rust_log = "info"
+```
+
+Start the server with:
+
+```powershell
+.\office-convert-server.exe --config .\office-convert-server.toml
+```
+
+Configuration priority is:
+
+```text
+CLI arguments > environment variables > configuration file > automatic discovery/defaults
+```
 
 
 ## Requirements
@@ -87,7 +117,7 @@ sudo dnf install libreoffice
 
 ## Env variables
  
-The server requires the following environment variables. 
+The server can be configured with the following environment variables. 
 
 > .env files will be loaded from the same and parent directories of the server
 
